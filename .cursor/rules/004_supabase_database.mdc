@@ -1,0 +1,574 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Supabase 数据库规范
+
+@context {
+  "type": "database_standards",
+  "platform": "Supabase",
+  "database": "PostgreSQL",
+  "security": "Row Level Security (RLS)",
+  "realtime": "enabled"
+}
+
+## 数据库操作规则
+
+@database_rules [
+  {
+    "id": "type_safe_queries",
+    "rule": "所有查询必须使用类型安全",
+    "severity": "error"
+  },
+  {
+    "id": "rls_required",
+    "rule": "所有表必须启用 RLS 策略",
+    "severity": "error"
+  },
+  {
+    "id": "separate_query_mutation",
+    "rule": "查询和变更操作分离",
+    "severity": "warning"
+  },
+  {
+    "id": "error_handling",
+    "rule": "所有数据库操作必须处理错误",
+    "severity": "error"
+  }
+]
+
+## 文件组织结构
+
+@file_structure {
+  "db/queries.ts": "只读查询操作",
+  "db/mutations.ts": "数据变更操作",
+  "db/cached-queries.ts": "缓存查询",
+  "db/auth.ts": "认证相关操作",
+  "db/storage.ts": "文件存储操作",
+  "lib/supabase/": "Supabase 客户端配置",
+  "supabase/migrations/": "数据库迁移文件"
+}
+
+```typescript
+// ✅ 类型安全的查询函数 (db/queries.ts)
+import type { Client, Database } from '@/lib/supabase/types';
+
+type Tables = Database['public']['Tables'];
+type Chat = Tables['chats']['Row'];
+type Message = Tables['messages']['Row'];
+
+export async function getChatById(
+  client: Client,
+  id: string
+): Promise<Chat | null> {
+  const { data, error } = await client
+    .from('chats')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') {
+      return null; // 未找到记录
+    }
+    throw error;
+  }
+
+  return data;
+}
+
+export async function getChatsByUserId(
+  client: Client,
+  userId: string
+): Promise<Chat[]> {
+  const { data, error } = await client
+    .from('chats')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+```
+
+## 数据变更操作
+
+@mutation_rules [
+  {
+    "id": "input_validation",
+    "rule": "使用 Zod 验证输入数据",
+    "severity": "error"
+  },
+  {
+    "id": "transaction_safety",
+    "rule": "复杂操作使用事务",
+    "severity": "warning"
+  },
+  {
+    "id": "optimistic_updates",
+    "rule": "适当使用乐观更新",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ 数据变更操作 (db/mutations.ts)
+import { z } from 'zod';
+import type { Client, Database } from '@/lib/supabase/types';
+
+type Tables = Database['public']['Tables'];
+
+// 输入验证 Schema
+const createChatSchema = z.object({
+  title: z.string().min(1).max(100),
+  userId: z.string().uuid(),
+});
+
+const createMessageSchema = z.object({
+  content: z.string().min(1).max(4000),
+  chatId: z.string().uuid(),
+  userId: z.string().uuid(),
+  role: z.enum(['user', 'assistant']),
+});
+
+export async function createChat(
+  client: Client,
+  input: unknown
+): Promise<Tables['chats']['Row']> {
+  // 验证输入
+  const { title, userId } = createChatSchema.parse(input);
+
+  const { data, error } = await client
+    .from('chats')
+    .insert({
+      title,
+      user_id: userId,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function createMessage(
+  client: Client,
+  input: unknown
+): Promise<Tables['messages']['Row']> {
+  const { content, chatId, userId, role } = createMessageSchema.parse(input);
+
+  const { data, error } = await client
+    .from('messages')
+    .insert({
+      content,
+      chat_id: chatId,
+      user_id: userId,
+      role,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+// ✅ 批量操作
+export async function saveMessages(
+  client: Client,
+  chatId: string,
+  messages: Tables['messages']['Insert'][]
+): Promise<void> {
+  const messagesWithChatId = messages.map((message) => ({
+    ...message,
+    chat_id: chatId,
+  }));
+
+  const { error } = await client
+    .from('messages')
+    .insert(messagesWithChatId);
+
+  if (error) throw error;
+}
+```
+
+## 认证和授权
+
+@auth_rules [
+  {
+    "id": "session_validation",
+    "rule": "验证用户会话",
+    "severity": "error"
+  },
+  {
+    "id": "user_context",
+    "rule": "操作必须在用户上下文中执行",
+    "severity": "error"
+  },
+  {
+    "id": "permission_check",
+    "rule": "检查用户权限",
+    "severity": "error"
+  }
+]
+
+```typescript
+// ✅ 认证操作 (db/auth.ts)
+import type { Client } from '@/lib/supabase/types';
+
+export async function getCurrentUser(client: Client) {
+  const {
+    data: { user },
+    error,
+  } = await client.auth.getUser();
+
+  if (error) {
+    throw new Error(`认证失败: ${error.message}`);
+  }
+
+  if (!user) {
+    throw new Error('用户未登录');
+  }
+
+  return user;
+}
+
+export async function requireAuth(client: Client) {
+  const user = await getCurrentUser(client);
+  return user;
+}
+
+// ✅ 权限检查
+export async function checkChatOwnership(
+  client: Client,
+  chatId: string,
+  userId: string
+): Promise<boolean> {
+  const { data, error } = await client
+    .from('chats')
+    .select('user_id')
+    .eq('id', chatId)
+    .eq('user_id', userId)
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') {
+      return false; // 聊天不存在或不属于用户
+    }
+    throw error;
+  }
+
+  return !!data;
+}
+```
+
+## RLS 策略规范
+
+@rls_policies [
+  {
+    "id": "enable_rls",
+    "rule": "所有表必须启用 RLS",
+    "severity": "error"
+  },
+  {
+    "id": "user_isolation",
+    "rule": "用户只能访问自己的数据",
+    "severity": "error"
+  },
+  {
+    "id": "policy_naming",
+    "rule": "策略命名要清晰描述权限",
+    "severity": "warning"
+  }
+]
+
+```sql
+-- ✅ RLS 策略示例 (supabase/migrations/)
+
+-- 启用 RLS
+ALTER TABLE chats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE votes ENABLE ROW LEVEL SECURITY;
+
+-- 聊天表策略
+CREATE POLICY "Users can view own chats" ON chats
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own chats" ON chats
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update own chats" ON chats
+  FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete own chats" ON chats
+  FOR DELETE USING (auth.uid() = user_id);
+
+-- 消息表策略
+CREATE POLICY "Users can view messages in own chats" ON messages
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM chats 
+      WHERE chats.id = messages.chat_id 
+      AND chats.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can insert messages in own chats" ON messages
+  FOR INSERT WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM chats 
+      WHERE chats.id = messages.chat_id 
+      AND chats.user_id = auth.uid()
+    )
+  );
+```
+
+## 实时订阅
+
+@realtime_rules [
+  {
+    "id": "selective_subscription",
+    "rule": "只订阅必要的数据变更",
+    "severity": "warning"
+  },
+  {
+    "id": "cleanup_subscriptions",
+    "rule": "组件卸载时清理订阅",
+    "severity": "error"
+  },
+  {
+    "id": "error_handling",
+    "rule": "处理订阅错误",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ 实时订阅 (hooks/useRealtimeMessages.ts)
+'use client';
+
+import { useEffect, useState } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import type { Database } from '@/lib/supabase/types';
+
+type Message = Database['public']['Tables']['messages']['Row'];
+
+export function useRealtimeMessages(chatId: string) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const supabase = createClient();
+
+  useEffect(() => {
+    // 订阅消息变更
+    const subscription = supabase
+      .channel(`chat-${chatId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `chat_id=eq.${chatId}`,
+        },
+        (payload) => {
+          const newMessage = payload.new as Message;
+          setMessages(prev => [...prev, newMessage]);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'messages',
+          filter: `chat_id=eq.${chatId}`,
+        },
+        (payload) => {
+          const updatedMessage = payload.new as Message;
+          setMessages(prev => 
+            prev.map(msg => 
+              msg.id === updatedMessage.id ? updatedMessage : msg
+            )
+          );
+        }
+      )
+      .subscribe();
+
+    // 清理订阅
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [chatId, supabase]);
+
+  return messages;
+}
+```
+
+## 文件存储
+
+@storage_rules [
+  {
+    "id": "file_validation",
+    "rule": "验证文件类型和大小",
+    "severity": "error"
+  },
+  {
+    "id": "secure_upload",
+    "rule": "使用安全的上传策略",
+    "severity": "error"
+  },
+  {
+    "id": "cleanup_unused",
+    "rule": "清理未使用的文件",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ 文件存储操作 (db/storage.ts)
+import type { Client } from '@/lib/supabase/types';
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+
+export async function uploadFile(
+  client: Client,
+  file: File,
+  userId: string
+): Promise<string> {
+  // 验证文件
+  if (file.size > MAX_FILE_SIZE) {
+    throw new Error('文件大小不能超过 10MB');
+  }
+
+  if (!ALLOWED_TYPES.includes(file.type)) {
+    throw new Error('不支持的文件类型');
+  }
+
+  // 生成文件路径
+  const fileExt = file.name.split('.').pop();
+  const fileName = `${userId}/${Date.now()}.${fileExt}`;
+
+  // 上传文件
+  const { data, error } = await client.storage
+    .from('documents')
+    .upload(fileName, file, {
+      cacheControl: '3600',
+      upsert: false,
+    });
+
+  if (error) throw error;
+
+  // 获取公共 URL
+  const { data: urlData } = client.storage
+    .from('documents')
+    .getPublicUrl(data.path);
+
+  return urlData.publicUrl;
+}
+
+export async function deleteFile(
+  client: Client,
+  filePath: string
+): Promise<void> {
+  const { error } = await client.storage
+    .from('documents')
+    .remove([filePath]);
+
+  if (error) throw error;
+}
+```
+
+## 错误处理
+
+@error_handling [
+  {
+    "id": "specific_errors",
+    "rule": "处理特定的数据库错误",
+    "severity": "error"
+  },
+  {
+    "id": "user_friendly_messages",
+    "rule": "提供用户友好的错误信息",
+    "severity": "warning"
+  },
+  {
+    "id": "error_logging",
+    "rule": "记录错误日志",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ 错误处理工具
+export function handleSupabaseError(error: any): never {
+  console.error('Supabase error:', error);
+
+  // 处理特定错误
+  switch (error.code) {
+    case 'PGRST116':
+      throw new Error('记录不存在');
+    case '23505':
+      throw new Error('数据已存在');
+    case '23503':
+      throw new Error('关联数据不存在');
+    case '42501':
+      throw new Error('权限不足');
+    default:
+      throw new Error('数据库操作失败，请稍后重试');
+  }
+}
+
+// ✅ 带重试的数据库操作
+export async function withRetry<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 3
+): Promise<T> {
+  let lastError: Error;
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error as Error;
+      
+      // 如果是权限错误，不重试
+      if (error.code === '42501') {
+        throw error;
+      }
+
+      // 等待后重试
+      if (i < maxRetries - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+      }
+    }
+  }
+
+  throw lastError!;
+}
+```
+
+## 禁止模式
+
+@forbidden_patterns [
+  {
+    "pattern": "直接 SQL 查询",
+    "reason": "使用 Supabase 客户端",
+    "alternative": "client.from().select()"
+  },
+  {
+    "pattern": "忽略 RLS",
+    "reason": "安全风险",
+    "alternative": "启用并配置 RLS 策略"
+  },
+  {
+    "pattern": "客户端存储敏感数据",
+    "reason": "安全风险",
+    "alternative": "服务端处理敏感操作"
+  },
+  {
+    "pattern": "未处理错误",
+    "reason": "用户体验差",
+    "alternative": "适当的错误处理"
+  }
+]

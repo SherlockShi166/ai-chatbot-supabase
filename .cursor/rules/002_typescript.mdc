@@ -1,0 +1,310 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# TypeScript 编码规范
+
+@context {
+  "type": "coding_standards",
+  "language": "TypeScript",
+  "version": "5+",
+  "strict_mode": true
+}
+
+## 类型定义规则
+
+@type_rules [
+  {
+    "id": "no_any",
+    "rule": "禁止使用 any 类型",
+    "severity": "error",
+    "alternative": "使用具体类型或 unknown"
+  },
+  {
+    "id": "interface_over_type",
+    "rule": "优先使用 interface 而非 type",
+    "severity": "warning",
+    "exception": "联合类型和计算类型使用 type"
+  },
+  {
+    "id": "explicit_return_types",
+    "rule": "函数必须显式声明返回类型",
+    "severity": "warning"
+  },
+  {
+    "id": "const_assertions",
+    "rule": "使用 as const 确保类型安全",
+    "severity": "warning"
+  }
+]
+
+## 接口定义
+
+@interface_patterns {
+  "naming": "PascalCase",
+  "properties": "camelCase",
+  "optional": "使用 ? 标记可选属性",
+  "readonly": "不可变数据使用 readonly"
+}
+
+```typescript
+// ✅ 好的接口定义
+interface User {
+  readonly id: string;
+  email: string;
+  name?: string;
+  createdAt: Date;
+}
+
+interface ChatMessage {
+  id: string;
+  content: string;
+  userId: string;
+  chatId: string;
+  createdAt: Date;
+}
+
+// ✅ 使用 const assertions
+const AI_MODELS = [
+  { id: 'gpt-4o', name: 'GPT-4o' },
+  { id: 'gpt-4o-mini', name: 'GPT-4o Mini' }
+] as const;
+
+type AIModel = typeof AI_MODELS[number];
+```
+
+## 函数类型
+
+@function_rules [
+  {
+    "id": "explicit_params",
+    "rule": "所有参数必须有类型注解",
+    "severity": "error"
+  },
+  {
+    "id": "explicit_return",
+    "rule": "复杂函数必须声明返回类型",
+    "severity": "warning"
+  },
+  {
+    "id": "async_return_types",
+    "rule": "异步函数必须声明 Promise 返回类型",
+    "severity": "error"
+  }
+]
+
+```typescript
+// ✅ 正确的函数类型定义
+async function getChatById(
+  client: Client, 
+  id: string
+): Promise<Chat | null> {
+  const { data, error } = await client
+    .from('chats')
+    .select('*')
+    .eq('id', id)
+    .single();
+  
+  if (error) throw error;
+  return data;
+}
+
+// ✅ 使用泛型
+function createApiResponse<T>(
+  data: T, 
+  success: boolean = true
+): ApiResponse<T> {
+  return { data, success, timestamp: new Date() };
+}
+```
+
+## 组件类型
+
+@component_types {
+  "props": "使用 interface 定义 Props",
+  "children": "明确声明 children 类型",
+  "refs": "使用 forwardRef 处理 ref 传递",
+  "events": "事件处理器使用具体的事件类型"
+}
+
+```typescript
+// ✅ React 组件类型定义
+interface ChatInputProps {
+  onSend: (message: string) => void;
+  disabled?: boolean;
+  placeholder?: string;
+  className?: string;
+}
+
+export function ChatInput({ 
+  onSend, 
+  disabled = false, 
+  placeholder = "输入消息...",
+  className 
+}: ChatInputProps): JSX.Element {
+  // 组件实现
+}
+
+// ✅ forwardRef 类型
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: 'primary' | 'secondary';
+  size?: 'sm' | 'md' | 'lg';
+}
+
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ variant = 'primary', size = 'md', className, ...props }, ref) => {
+    return (
+      <button
+        ref={ref}
+        className={cn(buttonVariants({ variant, size }), className)}
+        {...props}
+      />
+    );
+  }
+);
+```
+
+## 数据库类型
+
+@database_types {
+  "supabase": "使用 Supabase 生成的类型",
+  "tables": "为每个表定义类型",
+  "queries": "查询函数使用类型安全",
+  "mutations": "变更操作使用类型验证"
+}
+
+```typescript
+// ✅ Supabase 类型使用
+import type { Database } from '@/lib/supabase/types';
+
+type Tables = Database['public']['Tables'];
+type Chat = Tables['chats']['Row'];
+type ChatInsert = Tables['chats']['Insert'];
+type ChatUpdate = Tables['chats']['Update'];
+
+// ✅ 类型安全的查询函数
+export async function getChatsByUserId(
+  client: Client,
+  userId: string
+): Promise<Chat[]> {
+  const { data, error } = await client
+    .from('chats')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+```
+
+## 错误处理类型
+
+@error_types [
+  {
+    "id": "custom_errors",
+    "rule": "定义自定义错误类型",
+    "severity": "warning"
+  },
+  {
+    "id": "error_boundaries",
+    "rule": "错误边界使用具体错误类型",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ 自定义错误类型
+interface AppError {
+  code: string;
+  message: string;
+  details?: unknown;
+}
+
+interface AuthError extends AppError {
+  code: 'AUTH_ERROR';
+  userId?: string;
+}
+
+interface DatabaseError extends AppError {
+  code: 'DATABASE_ERROR';
+  query?: string;
+}
+
+// ✅ 错误处理函数
+function handleError(error: unknown): AppError {
+  if (error instanceof Error) {
+    return {
+      code: 'UNKNOWN_ERROR',
+      message: error.message,
+      details: error.stack
+    };
+  }
+  
+  return {
+    code: 'UNKNOWN_ERROR',
+    message: 'An unknown error occurred'
+  };
+}
+```
+
+## 环境变量类型
+
+@env_types {
+  "declaration": "声明环境变量类型",
+  "validation": "运行时验证环境变量",
+  "type_safety": "确保类型安全访问"
+}
+
+```typescript
+// ✅ 环境变量类型声明
+interface ProcessEnv {
+  NEXT_PUBLIC_SUPABASE_URL: string;
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: string;
+  OPENAI_API_KEY: string;
+  DATABASE_URL: string;
+}
+
+declare global {
+  namespace NodeJS {
+    interface ProcessEnv extends ProcessEnv {}
+  }
+}
+
+// ✅ 环境变量验证
+import { z } from 'zod';
+
+const envSchema = z.object({
+  NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
+  OPENAI_API_KEY: z.string().min(1),
+});
+
+export const env = envSchema.parse(process.env);
+```
+
+## 禁止模式
+
+@forbidden_patterns [
+  {
+    "pattern": "any",
+    "reason": "失去类型安全",
+    "alternative": "使用具体类型或 unknown"
+  },
+  {
+    "pattern": "// @ts-ignore",
+    "reason": "忽略类型检查",
+    "alternative": "修复类型问题或使用 // @ts-expect-error"
+  },
+  {
+    "pattern": "Function",
+    "reason": "过于宽泛",
+    "alternative": "使用具体的函数签名"
+  },
+  {
+    "pattern": "object",
+    "reason": "过于宽泛",
+    "alternative": "使用具体的对象类型"
+  }
+]

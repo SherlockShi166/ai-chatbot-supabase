@@ -1,0 +1,711 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# AI 集成规范
+
+@context {
+  "type": "ai_integration",
+  "sdk": "Vercel AI SDK 3.4+",
+  "provider": "OpenAI",
+  "models": ["gpt-4o", "gpt-4o-mini"],
+  "features": ["streaming", "tool_calling", "structured_output"]
+}
+
+## AI SDK 配置规则
+
+@ai_config_rules [
+  {
+    "id": "centralized_config",
+    "rule": "AI 配置集中在 ai/ 目录",
+    "severity": "warning"
+  },
+  {
+    "id": "model_abstraction",
+    "rule": "使用模型抽象层",
+    "severity": "warning"
+  },
+  {
+    "id": "streaming_first",
+    "rule": "优先使用流式响应",
+    "severity": "warning"
+  },
+  {
+    "id": "error_handling",
+    "rule": "处理 AI 服务错误",
+    "severity": "error"
+  }
+]
+
+```typescript
+// ✅ AI SDK 配置 (ai/index.ts)
+import { openai } from '@ai-sdk/openai';
+import { createAI } from 'ai/rsc';
+import { DEFAULT_MODEL_NAME } from './models';
+
+export const ai = createAI({
+  model: openai(DEFAULT_MODEL_NAME),
+  initial: [],
+});
+
+// ✅ 模型配置 (ai/models.ts)
+export interface Model {
+  id: string;
+  label: string;
+  apiIdentifier: string;
+  description: string;
+  maxTokens?: number;
+  temperature?: number;
+}
+
+export const models: Array<Model> = [
+  {
+    id: 'gpt-4o-mini',
+    label: 'GPT 4o mini',
+    apiIdentifier: 'gpt-4o-mini',
+    description: '快速轻量级任务的小型模型',
+    maxTokens: 4096,
+    temperature: 0.7,
+  },
+  {
+    id: 'gpt-4o',
+    label: 'GPT 4o',
+    apiIdentifier: 'gpt-4o',
+    description: '复杂多步骤任务的强大模型',
+    maxTokens: 8192,
+    temperature: 0.7,
+  },
+] as const;
+
+export const DEFAULT_MODEL_NAME: string = 'gpt-4o-mini';
+
+export function getModelById(id: string): Model | undefined {
+  return models.find(model => model.id === id);
+}
+```
+
+## 提示词管理
+
+@prompt_rules [
+  {
+    "id": "template_based",
+    "rule": "使用模板化提示词",
+    "severity": "warning"
+  },
+  {
+    "id": "context_aware",
+    "rule": "提示词要考虑上下文",
+    "severity": "warning"
+  },
+  {
+    "id": "role_definition",
+    "rule": "明确定义 AI 角色",
+    "severity": "warning"
+  },
+  {
+    "id": "safety_guidelines",
+    "rule": "包含安全使用指南",
+    "severity": "error"
+  }
+]
+
+```typescript
+// ✅ 提示词模板 (ai/prompts.ts)
+export interface PromptTemplate {
+  system: string;
+  user?: string;
+  variables?: string[];
+}
+
+export const CHAT_PROMPTS = {
+  default: {
+    system: `你是一个有用、准确、诚实的 AI 助手。请遵循以下准则：
+
+1. 提供准确、有用的信息
+2. 承认不确定性，不编造信息
+3. 保持友好和专业的语调
+4. 如果问题涉及敏感内容，请礼貌地拒绝
+5. 优先考虑用户安全和隐私
+
+当前时间：{currentTime}
+用户语言偏好：{language}`,
+    variables: ['currentTime', 'language'],
+  },
+
+  coding: {
+    system: `你是一个专业的编程助手。请遵循以下准则：
+
+1. 提供清晰、可运行的代码示例
+2. 解释代码的工作原理
+3. 遵循最佳实践和编码规范
+4. 考虑性能和安全性
+5. 提供错误处理建议
+
+技术栈：Next.js 15, React 19, TypeScript, Supabase
+编码风格：{codingStyle}`,
+    variables: ['codingStyle'],
+  },
+
+  document_analysis: {
+    system: `你是一个文档分析专家。请分析提供的文档内容并：
+
+1. 总结主要内容
+2. 提取关键信息
+3. 回答相关问题
+4. 保持客观和准确
+5. 引用具体的文档部分
+
+文档类型：{documentType}
+分析重点：{analysisFocus}`,
+    variables: ['documentType', 'analysisFocus'],
+  },
+} as const;
+
+export function buildPrompt(
+  template: PromptTemplate,
+  variables: Record<string, string> = {}
+): string {
+  let prompt = template.system;
+
+  // 替换变量
+  if (template.variables) {
+    for (const variable of template.variables) {
+      const value = variables[variable] || '';
+      prompt = prompt.replace(`{${variable}}`, value);
+    }
+  }
+
+  return prompt;
+}
+
+// ✅ 安全过滤
+export function sanitizeUserInput(input: string): string {
+  // 移除潜在的注入攻击
+  return input
+    .replace(/\{[^}]*\}/g, '') // 移除模板变量
+    .replace(/<script[^>]*>.*?<\/script>/gi, '') // 移除脚本标签
+    .trim();
+}
+```
+
+## 流式响应处理
+
+@streaming_rules [
+  {
+    "id": "use_streaming",
+    "rule": "优先使用流式响应",
+    "severity": "warning"
+  },
+  {
+    "id": "error_recovery",
+    "rule": "处理流式响应中断",
+    "severity": "error"
+  },
+  {
+    "id": "progress_indication",
+    "rule": "显示响应进度",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ 流式聊天 API (app/(chat)/api/chat/route.ts)
+import { openai } from '@ai-sdk/openai';
+import { streamText } from 'ai';
+import { NextRequest } from 'next/server';
+import { buildPrompt, CHAT_PROMPTS, sanitizeUserInput } from '@/ai/prompts';
+import { getModelById } from '@/ai/models';
+
+export async function POST(request: NextRequest) {
+  try {
+    const { messages, modelId = 'gpt-4o-mini' } = await request.json();
+
+    // 验证输入
+    if (!messages || !Array.isArray(messages)) {
+      return new Response('Invalid messages format', { status: 400 });
+    }
+
+    // 获取模型配置
+    const model = getModelById(modelId);
+    if (!model) {
+      return new Response('Invalid model', { status: 400 });
+    }
+
+    // 构建系统提示词
+    const systemPrompt = buildPrompt(CHAT_PROMPTS.default, {
+      currentTime: new Date().toISOString(),
+      language: 'zh-CN',
+    });
+
+    // 清理用户输入
+    const cleanMessages = messages.map(msg => ({
+      ...msg,
+      content: sanitizeUserInput(msg.content),
+    }));
+
+    // 流式生成响应
+    const result = await streamText({
+      model: openai(model.apiIdentifier),
+      system: systemPrompt,
+      messages: cleanMessages,
+      maxTokens: model.maxTokens,
+      temperature: model.temperature,
+      onFinish: async ({ text, usage }) => {
+        // 保存聊天记录
+        console.log('Generated text:', text);
+        console.log('Token usage:', usage);
+      },
+    });
+
+    return result.toAIStreamResponse();
+  } catch (error) {
+    console.error('Chat API error:', error);
+    return new Response('Internal server error', { status: 500 });
+  }
+}
+```
+
+## 客户端 AI 集成
+
+@client_ai_rules [
+  {
+    "id": "use_ai_hooks",
+    "rule": "使用 AI SDK 提供的 Hooks",
+    "severity": "warning"
+  },
+  {
+    "id": "loading_states",
+    "rule": "处理加载状态",
+    "severity": "warning"
+  },
+  {
+    "id": "error_boundaries",
+    "rule": "使用错误边界",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ 聊天组件 (components/custom/chat-interface.tsx)
+'use client';
+
+import { useChat } from 'ai/react';
+import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card } from '@/components/ui/card';
+
+interface ChatInterfaceProps {
+  chatId: string;
+  initialMessages?: any[];
+}
+
+export function ChatInterface({ chatId, initialMessages = [] }: ChatInterfaceProps) {
+  const [selectedModel, setSelectedModel] = useState('gpt-4o-mini');
+
+  const {
+    messages,
+    input,
+    handleInputChange,
+    handleSubmit,
+    isLoading,
+    error,
+    reload,
+    stop,
+  } = useChat({
+    api: '/api/chat',
+    initialMessages,
+    body: {
+      modelId: selectedModel,
+      chatId,
+    },
+    onError: (error) => {
+      console.error('Chat error:', error);
+    },
+    onFinish: (message) => {
+      console.log('Message finished:', message);
+    },
+  });
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* 消息列表 */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.map((message) => (
+          <Card key={message.id} className="p-4">
+            <div className="flex items-start space-x-3">
+              <div className="flex-shrink-0">
+                {message.role === 'user' ? '👤' : '🤖'}
+              </div>
+              <div className="flex-1">
+                <div className="text-sm font-medium mb-1">
+                  {message.role === 'user' ? '用户' : 'AI 助手'}
+                </div>
+                <div className="text-sm whitespace-pre-wrap">
+                  {message.content}
+                </div>
+              </div>
+            </div>
+          </Card>
+        ))}
+
+        {/* 加载状态 */}
+        {isLoading && (
+          <Card className="p-4">
+            <div className="flex items-center space-x-2">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+              <span className="text-sm text-gray-600">AI 正在思考...</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={stop}
+                className="ml-auto"
+              >
+                停止
+              </Button>
+            </div>
+          </Card>
+        )}
+
+        {/* 错误状态 */}
+        {error && (
+          <Card className="p-4 border-red-200 bg-red-50">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-red-600">
+                发生错误：{error.message}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={reload}
+              >
+                重试
+              </Button>
+            </div>
+          </Card>
+        )}
+      </div>
+
+      {/* 输入区域 */}
+      <div className="border-t p-4">
+        <form onSubmit={handleSubmit} className="flex space-x-2">
+          <Input
+            value={input}
+            onChange={handleInputChange}
+            placeholder="输入消息..."
+            disabled={isLoading}
+            className="flex-1"
+          />
+          <Button
+            type="submit"
+            disabled={isLoading || !input.trim()}
+          >
+            发送
+          </Button>
+        </form>
+      </div>
+    </div>
+  );
+}
+```
+
+## 工具调用和结构化输出
+
+@tool_calling_rules [
+  {
+    "id": "define_tools",
+    "rule": "明确定义可用工具",
+    "severity": "warning"
+  },
+  {
+    "id": "validate_tool_calls",
+    "rule": "验证工具调用参数",
+    "severity": "error"
+  },
+  {
+    "id": "handle_tool_errors",
+    "rule": "处理工具执行错误",
+    "severity": "error"
+  }
+]
+
+```typescript
+// ✅ 工具定义 (ai/tools.ts)
+import { z } from 'zod';
+import { tool } from 'ai';
+
+export const searchDocuments = tool({
+  description: '搜索文档内容',
+  parameters: z.object({
+    query: z.string().describe('搜索查询'),
+    limit: z.number().optional().describe('结果数量限制'),
+  }),
+  execute: async ({ query, limit = 10 }) => {
+    try {
+      // 实现文档搜索逻辑
+      const results = await searchDocumentsInDatabase(query, limit);
+      return {
+        success: true,
+        results,
+        count: results.length,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : '搜索失败',
+      };
+    }
+  },
+});
+
+export const createChat = tool({
+  description: '创建新的聊天会话',
+  parameters: z.object({
+    title: z.string().describe('聊天标题'),
+    userId: z.string().describe('用户ID'),
+  }),
+  execute: async ({ title, userId }) => {
+    try {
+      const chat = await createNewChat({ title, userId });
+      return {
+        success: true,
+        chatId: chat.id,
+        title: chat.title,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : '创建聊天失败',
+      };
+    }
+  },
+});
+
+// ✅ 工具集合
+export const availableTools = {
+  searchDocuments,
+  createChat,
+};
+```
+
+## AI 中间件
+
+@middleware_rules [
+  {
+    "id": "rate_limiting",
+    "rule": "实现速率限制",
+    "severity": "warning"
+  },
+  {
+    "id": "content_filtering",
+    "rule": "过滤不当内容",
+    "severity": "error"
+  },
+  {
+    "id": "usage_tracking",
+    "rule": "跟踪 API 使用情况",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ AI 中间件 (ai/custom-middleware.ts)
+import { NextRequest, NextResponse } from 'next/server';
+
+interface AIMiddlewareOptions {
+  rateLimit?: {
+    requests: number;
+    window: number; // 时间窗口（秒）
+  };
+  contentFilter?: boolean;
+  usageTracking?: boolean;
+}
+
+export function createAIMiddleware(options: AIMiddlewareOptions = {}) {
+  return async (request: NextRequest) => {
+    try {
+      // 速率限制
+      if (options.rateLimit) {
+        const rateLimitResult = await checkRateLimit(request, options.rateLimit);
+        if (!rateLimitResult.allowed) {
+          return new NextResponse('Rate limit exceeded', { status: 429 });
+        }
+      }
+
+      // 内容过滤
+      if (options.contentFilter) {
+        const body = await request.json();
+        const contentCheckResult = await checkContent(body);
+        if (!contentCheckResult.safe) {
+          return new NextResponse('Content not allowed', { status: 400 });
+        }
+      }
+
+      // 使用情况跟踪
+      if (options.usageTracking) {
+        await trackAPIUsage(request);
+      }
+
+      return NextResponse.next();
+    } catch (error) {
+      console.error('AI middleware error:', error);
+      return new NextResponse('Internal server error', { status: 500 });
+    }
+  };
+}
+
+async function checkRateLimit(
+  request: NextRequest,
+  config: { requests: number; window: number }
+): Promise<{ allowed: boolean; remaining: number }> {
+  // 实现速率限制逻辑
+  const clientId = request.ip || 'anonymous';
+  // ... 速率限制实现
+  return { allowed: true, remaining: config.requests };
+}
+
+async function checkContent(body: any): Promise<{ safe: boolean; reason?: string }> {
+  // 实现内容过滤逻辑
+  const content = body.messages?.map(m => m.content).join(' ') || '';
+  
+  // 简单的关键词过滤
+  const blockedKeywords = ['spam', 'abuse', 'harmful'];
+  const hasBlockedContent = blockedKeywords.some(keyword => 
+    content.toLowerCase().includes(keyword)
+  );
+
+  return {
+    safe: !hasBlockedContent,
+    reason: hasBlockedContent ? 'Contains blocked content' : undefined,
+  };
+}
+
+async function trackAPIUsage(request: NextRequest): Promise<void> {
+  // 实现使用情况跟踪
+  const usage = {
+    timestamp: new Date(),
+    endpoint: request.url,
+    userAgent: request.headers.get('user-agent'),
+    ip: request.ip,
+  };
+  
+  // 保存到数据库或日志系统
+  console.log('API usage:', usage);
+}
+```
+
+## 错误处理和重试
+
+@error_handling [
+  {
+    "id": "graceful_degradation",
+    "rule": "优雅降级处理",
+    "severity": "warning"
+  },
+  {
+    "id": "retry_logic",
+    "rule": "实现重试机制",
+    "severity": "warning"
+  },
+  {
+    "id": "fallback_responses",
+    "rule": "提供备用响应",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ AI 错误处理工具
+export class AIError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public retryable: boolean = false
+  ) {
+    super(message);
+    this.name = 'AIError';
+  }
+}
+
+export async function withRetry<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 3,
+  delay: number = 1000
+): Promise<T> {
+  let lastError: Error;
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error as Error;
+
+      // 如果是不可重试的错误，直接抛出
+      if (error instanceof AIError && !error.retryable) {
+        throw error;
+      }
+
+      // 最后一次重试失败
+      if (i === maxRetries - 1) {
+        break;
+      }
+
+      // 等待后重试
+      await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
+    }
+  }
+
+  throw lastError!;
+}
+
+export function handleAIError(error: unknown): AIError {
+  if (error instanceof AIError) {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    // 根据错误消息判断错误类型
+    if (error.message.includes('rate limit')) {
+      return new AIError('API 调用频率过高，请稍后重试', 'RATE_LIMIT', true);
+    }
+    
+    if (error.message.includes('timeout')) {
+      return new AIError('请求超时，请重试', 'TIMEOUT', true);
+    }
+
+    if (error.message.includes('unauthorized')) {
+      return new AIError('API 密钥无效', 'UNAUTHORIZED', false);
+    }
+
+    return new AIError(error.message, 'UNKNOWN', true);
+  }
+
+  return new AIError('未知错误', 'UNKNOWN', true);
+}
+```
+
+## 禁止模式
+
+@forbidden_patterns [
+  {
+    "pattern": "硬编码 API 密钥",
+    "reason": "安全风险",
+    "alternative": "使用环境变量"
+  },
+  {
+    "pattern": "忽略流式响应",
+    "reason": "用户体验差",
+    "alternative": "使用 streamText 和相关 hooks"
+  },
+  {
+    "pattern": "未处理 AI 错误",
+    "reason": "用户体验差",
+    "alternative": "实现适当的错误处理"
+  },
+  {
+    "pattern": "直接暴露提示词",
+    "reason": "安全和质量问题",
+    "alternative": "使用提示词模板和变量替换"
+  }
+]

@@ -1,0 +1,505 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# React & Next.js 开发规范
+
+@context {
+  "type": "framework_standards",
+  "react_version": "19 RC",
+  "nextjs_version": "15",
+  "router": "App Router",
+  "rendering": "Server Components First"
+}
+
+## Next.js App Router 规则
+
+@app_router_rules [
+  {
+    "id": "app_router_only",
+    "rule": "使用 App Router，禁止 Pages Router",
+    "severity": "error"
+  },
+  {
+    "id": "route_groups",
+    "rule": "使用括号分组路由 (auth), (chat)",
+    "severity": "warning"
+  },
+  {
+    "id": "special_files",
+    "rule": "使用 layout.tsx, loading.tsx, error.tsx, not-found.tsx",
+    "severity": "warning"
+  },
+  {
+    "id": "server_actions",
+    "rule": "Server Actions 放在 actions.ts 文件中",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ App Router 文件结构
+app/
+├── (auth)/
+│   ├── login/
+│   │   └── page.tsx
+│   └── layout.tsx
+├── (chat)/
+│   ├── chat/[id]/
+│   │   ├── page.tsx
+│   │   ├── loading.tsx
+│   │   └── error.tsx
+│   ├── actions.ts
+│   └── layout.tsx
+├── globals.css
+└── layout.tsx
+
+// ✅ Server Actions
+'use server';
+
+export async function createChat(formData: FormData) {
+  const title = formData.get('title') as string;
+  // 服务端逻辑
+}
+```
+
+## React 组件规则
+
+@component_rules [
+  {
+    "id": "server_components_first",
+    "rule": "优先使用 Server Components",
+    "severity": "warning"
+  },
+  {
+    "id": "use_client_directive",
+    "rule": "客户端组件必须使用 'use client' 指令",
+    "severity": "error"
+  },
+  {
+    "id": "function_components",
+    "rule": "使用函数组件，避免类组件",
+    "severity": "error"
+  },
+  {
+    "id": "component_naming",
+    "rule": "组件名使用 PascalCase",
+    "severity": "error"
+  }
+]
+
+```typescript
+// ✅ Server Component (默认)
+export default async function ChatPage({ 
+  params 
+}: { 
+  params: { id: string } 
+}) {
+  const chat = await getChatById(params.id);
+  
+  return (
+    <div>
+      <ChatHeader chat={chat} />
+      <ChatMessages chatId={params.id} />
+      <ChatInput chatId={params.id} />
+    </div>
+  );
+}
+
+// ✅ Client Component
+'use client';
+
+import { useState } from 'react';
+
+interface ChatInputProps {
+  chatId: string;
+  onSend: (message: string) => void;
+}
+
+export function ChatInput({ chatId, onSend }: ChatInputProps) {
+  const [input, setInput] = useState('');
+  
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (input.trim()) {
+      onSend(input);
+      setInput('');
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        placeholder="输入消息..."
+      />
+      <button type="submit">发送</button>
+    </form>
+  );
+}
+```
+
+## Hooks 使用规则
+
+@hooks_rules [
+  {
+    "id": "hooks_order",
+    "rule": "Hooks 必须在组件顶层调用",
+    "severity": "error"
+  },
+  {
+    "id": "custom_hooks",
+    "rule": "自定义 Hooks 以 use 开头",
+    "severity": "error"
+  },
+  {
+    "id": "dependency_arrays",
+    "rule": "正确设置依赖数组",
+    "severity": "error"
+  },
+  {
+    "id": "memo_optimization",
+    "rule": "适当使用 useMemo 和 useCallback",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ 正确的 Hooks 使用
+'use client';
+
+import { useState, useEffect, useCallback, useMemo } from 'react';
+
+export function ChatList({ userId }: { userId: string }) {
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // ✅ useEffect 依赖数组
+  useEffect(() => {
+    async function loadChats() {
+      setLoading(true);
+      try {
+        const data = await getChatsByUserId(userId);
+        setChats(data);
+      } finally {
+        setLoading(false);
+      }
+    }
+    
+    loadChats();
+  }, [userId]); // 正确的依赖
+
+  // ✅ useCallback 优化
+  const handleDeleteChat = useCallback(async (chatId: string) => {
+    await deleteChat(chatId);
+    setChats(prev => prev.filter(chat => chat.id !== chatId));
+  }, []);
+
+  // ✅ useMemo 优化
+  const sortedChats = useMemo(() => 
+    chats.sort((a, b) => 
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    ), 
+    [chats]
+  );
+
+  if (loading) return <div>加载中...</div>;
+
+  return (
+    <div>
+      {sortedChats.map(chat => (
+        <ChatItem 
+          key={chat.id} 
+          chat={chat} 
+          onDelete={handleDeleteChat}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ✅ 自定义 Hook
+export function useChat(chatId: string) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // 加载消息逻辑
+  }, [chatId]);
+
+  const sendMessage = useCallback(async (content: string) => {
+    // 发送消息逻辑
+  }, [chatId]);
+
+  return { messages, loading, sendMessage };
+}
+```
+
+## 性能优化规则
+
+@performance_rules [
+  {
+    "id": "react_memo",
+    "rule": "纯组件使用 React.memo",
+    "severity": "warning"
+  },
+  {
+    "id": "lazy_loading",
+    "rule": "大组件使用 React.lazy",
+    "severity": "warning"
+  },
+  {
+    "id": "suspense_boundaries",
+    "rule": "使用 Suspense 处理异步组件",
+    "severity": "warning"
+  },
+  {
+    "id": "avoid_inline_objects",
+    "rule": "避免在渲染中创建对象和函数",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ React.memo 优化
+interface ChatMessageProps {
+  message: Message;
+  onVote: (messageId: string, isUpvoted: boolean) => void;
+}
+
+export const ChatMessage = React.memo<ChatMessageProps>(({ 
+  message, 
+  onVote 
+}) => {
+  return (
+    <div className="message">
+      <p>{message.content}</p>
+      <VoteButtons 
+        messageId={message.id}
+        onVote={onVote}
+      />
+    </div>
+  );
+});
+
+// ✅ React.lazy 懒加载
+const ChatSettings = React.lazy(() => import('./ChatSettings'));
+
+export function ChatPage() {
+  const [showSettings, setShowSettings] = useState(false);
+
+  return (
+    <div>
+      <ChatHeader />
+      <ChatMessages />
+      {showSettings && (
+        <Suspense fallback={<div>加载设置...</div>}>
+          <ChatSettings />
+        </Suspense>
+      )}
+    </div>
+  );
+}
+
+// ❌ 避免内联对象
+function BadComponent() {
+  return (
+    <div>
+      {/* ❌ 每次渲染都创建新对象 */}
+      <Component style={{ margin: 10 }} />
+      <Component onClick={() => console.log('click')} />
+    </div>
+  );
+}
+
+// ✅ 正确的做法
+const styles = { margin: 10 };
+
+function GoodComponent() {
+  const handleClick = useCallback(() => {
+    console.log('click');
+  }, []);
+
+  return (
+    <div>
+      <Component style={styles} />
+      <Component onClick={handleClick} />
+    </div>
+  );
+}
+```
+
+## 错误处理规则
+
+@error_handling [
+  {
+    "id": "error_boundaries",
+    "rule": "使用 error.tsx 处理路由级错误",
+    "severity": "warning"
+  },
+  {
+    "id": "try_catch_async",
+    "rule": "异步操作使用 try-catch",
+    "severity": "error"
+  },
+  {
+    "id": "error_states",
+    "rule": "组件处理错误状态",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ error.tsx 错误边界
+'use client';
+
+export default function Error({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
+  return (
+    <div className="error-container">
+      <h2>出错了！</h2>
+      <p>{error.message}</p>
+      <button onClick={reset}>重试</button>
+    </div>
+  );
+}
+
+// ✅ 组件错误处理
+export function ChatList() {
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadChats() {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await getChatsByUserId();
+        setChats(data);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '加载失败');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadChats();
+  }, []);
+
+  if (loading) return <LoadingSpinner />;
+  if (error) return <ErrorMessage message={error} />;
+
+  return (
+    <div>
+      {chats.map(chat => (
+        <ChatItem key={chat.id} chat={chat} />
+      ))}
+    </div>
+  );
+}
+```
+
+## 样式和 UI 规则
+
+@styling_rules [
+  {
+    "id": "tailwind_first",
+    "rule": "优先使用 Tailwind CSS",
+    "severity": "warning"
+  },
+  {
+    "id": "shadcn_components",
+    "rule": "优先使用 shadcn/ui 组件",
+    "severity": "warning"
+  },
+  {
+    "id": "css_variables",
+    "rule": "使用 CSS 变量定义主题",
+    "severity": "warning"
+  },
+  {
+    "id": "responsive_design",
+    "rule": "确保响应式设计",
+    "severity": "warning"
+  }
+]
+
+```typescript
+// ✅ 使用 shadcn/ui 组件
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+
+export function ChatForm() {
+  return (
+    <Card className="w-full max-w-md mx-auto">
+      <CardHeader>
+        <CardTitle>新建聊天</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Input 
+          placeholder="聊天标题" 
+          className="w-full"
+        />
+        <Button 
+          type="submit" 
+          className="w-full"
+          size="lg"
+        >
+          创建聊天
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ✅ 响应式设计
+export function ChatLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex h-screen">
+      {/* 侧边栏 */}
+      <aside className="hidden md:flex w-64 bg-gray-100 dark:bg-gray-900">
+        <ChatSidebar />
+      </aside>
+      
+      {/* 主内容区 */}
+      <main className="flex-1 flex flex-col">
+        {children}
+      </main>
+    </div>
+  );
+}
+```
+
+## 禁止模式
+
+@forbidden_patterns [
+  {
+    "pattern": "class components",
+    "reason": "使用函数组件和 Hooks",
+    "alternative": "函数组件 + Hooks"
+  },
+  {
+    "pattern": "Pages Router",
+    "reason": "项目使用 App Router",
+    "alternative": "App Router 结构"
+  },
+  {
+    "pattern": "useEffect 无依赖数组",
+    "reason": "可能导致无限循环",
+    "alternative": "正确设置依赖数组"
+  },
+  {
+    "pattern": "直接修改 state",
+    "reason": "违反 React 不可变原则",
+    "alternative": "使用 setState 或 reducer"
+  }
+]
